@@ -241,6 +241,12 @@ async function handleStreamResponse(
       }
     }
 
+    const finalEvents = transformer.finalize();
+    for (const event of finalEvents) {
+      eventCount++;
+      res.write(event);
+    }
+
     console.log(`[protocol-translator] Stream complete: ${chunkCount} OpenAI chunks → ${eventCount} Anthropic events`);
   } catch (err) {
     console.error('[protocol-translator] Stream error:', err);

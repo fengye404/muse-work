@@ -34,6 +34,7 @@ export class OpenAIToAnthropicStreamTransformer {
   private outputTokens = 0;
   private model: string;
   private messageId: string;
+  private pendingFinishReason: string | null = null;
 
   constructor(options: StreamTransformerOptions) {
     this.model = options.model;
@@ -43,6 +44,9 @@ export class OpenAIToAnthropicStreamTransformer {
   /**
    * Convert a single OpenAI chunk to zero or more Anthropic SSE event strings.
    * Returns an array because one OpenAI chunk can produce multiple Anthropic events.
+   *
+   * When finish_reason arrives, we defer the final message_delta/message_stop
+   * events so that a subsequent usage-only chunk can be incorporated first.
    */
   transformChunk(chunk: OpenAIStreamChunk): string[] {
     const events: string[] = [];
@@ -54,7 +58,11 @@ export class OpenAIToAnthropicStreamTransformer {
     }
 
     const choice = chunk.choices?.[0];
+
     if (!choice) {
+      if (this.pendingFinishReason !== null && chunk.usage) {
+        events.push(...this.emitFinalEvents());
+      }
       return events;
     }
 
@@ -106,11 +114,34 @@ export class OpenAIToAnthropicStreamTransformer {
       }
       this.toolCallBlocks.clear();
 
-      events.push(this.emitMessageDelta(choice.finish_reason));
-      events.push(sseEvent('message_stop', { type: 'message_stop' }));
+      if (chunk.usage) {
+        events.push(this.emitMessageDelta(choice.finish_reason));
+        events.push(sseEvent('message_stop', { type: 'message_stop' }));
+      } else {
+        this.pendingFinishReason = choice.finish_reason;
+      }
     }
 
     return events;
+  }
+
+  /**
+   * Flush any deferred message_delta/message_stop events.
+   * Must be called after the last chunk to handle providers that send
+   * usage separately from finish_reason.
+   */
+  finalize(): string[] {
+    return this.emitFinalEvents();
+  }
+
+  private emitFinalEvents(): string[] {
+    if (this.pendingFinishReason === null) return [];
+    const reason = this.pendingFinishReason;
+    this.pendingFinishReason = null;
+    return [
+      this.emitMessageDelta(reason),
+      sseEvent('message_stop', { type: 'message_stop' }),
+    ];
   }
 
   // -------------------------------------------------------------------------

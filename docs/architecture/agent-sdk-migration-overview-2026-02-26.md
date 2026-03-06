@@ -57,9 +57,9 @@ AI Desktop Assistant 立项之初定位为基于 Claude Code SDK（现 Claude Ag
 
 ### ADR-4: 环境变量动态切换 Provider
 
-**决策**: 每次调用 `query()` 前动态设置 `process.env.ANTHROPIC_API_KEY` 和 `process.env.ANTHROPIC_BASE_URL`。
+**决策**: 每次调用 `query()` 前通过 `options.env` 动态注入 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL`。
 
-**理由**: SDK 通过环境变量读取认证信息，桌面应用需支持多 Provider 配置切换。
+**理由**: SDK 可通过 `options.env` 读取认证信息，桌面应用需支持多 Provider 配置切换；OpenAI 模式下同时将 `settingSources` 限制为 `['project', 'local']`，避免读取用户级 `~/.claude/settings.json`。
 
 ## 迁移阶段
 

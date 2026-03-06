@@ -16,6 +16,7 @@
     "test:chat-stream-state": "tsc -p tsconfig.renderer-tests.json && node --test dist-tests/src/renderer/stores/__tests__/chat-stream-state.test.js",
     "test:chat-stream-listener": "tsc -p tsconfig.renderer-tests.json && node --test dist-tests/src/renderer/stores/__tests__/chat-stream-listener.test.js",
     "test:chat-stream": "tsc -p tsconfig.renderer-tests.json && node --test dist-tests/src/renderer/stores/__tests__/chat-stream-state.test.js dist-tests/src/renderer/stores/__tests__/chat-stream-listener.test.js",
+    "test:agent-service-settings": "tsc -p tsconfig.main-tests.json && node --test dist-tests/src/__tests__/agent-service-openai-settings.test.js",
     "lint": "eslint src --ext .ts,.tsx",
     "lint:fix": "eslint src --ext .ts,.tsx --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",

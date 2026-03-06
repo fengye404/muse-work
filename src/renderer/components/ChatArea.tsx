@@ -111,10 +111,6 @@ function formatTokenCount(value: number | null): string {
   return Math.max(0, Math.round(value)).toLocaleString('en-US');
 }
 
-function formatPercent(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return '--';
-  return `${Math.max(0, value).toFixed(1)}%`;
-}
 
 function isLikelyImageFile(file: Pick<File, 'name' | 'type'>): boolean {
   if (file.type.startsWith('image/')) {
@@ -280,9 +276,15 @@ export function ChatArea() {
   const activeWaitStage: WaitStage = hasPendingApproval ? 'approval' : (shouldShowThinking ? 'model' : null);
   const showWaitDurationHint = waitElapsedSec >= WAIT_TIME_HINT_THRESHOLD_SEC;
   const hasComposedContent = input.trim().length > 0 || pastedImages.length > 0;
-  const contextRemainingPercentLabel = formatPercent(usageStats.contextRemainingPercent);
-  const totalInputTokensLabel = formatTokenCount(usageStats.totalInputTokens);
-  const totalOutputTokensLabel = formatTokenCount(usageStats.totalOutputTokens);
+  const displayInputTokens = (usageStats.totalInputTokens ?? 0) + (usageStats.currentTurnInputTokens ?? 0);
+  const displayOutputTokens = (usageStats.totalOutputTokens ?? 0) + (usageStats.currentTurnOutputTokens ?? 0);
+  const hasAnyUsage = usageStats.totalInputTokens !== null || usageStats.currentTurnInputTokens !== null;
+  const totalInputTokensLabel = hasAnyUsage ? formatTokenCount(displayInputTokens) : '--';
+  const totalOutputTokensLabel = hasAnyUsage ? formatTokenCount(displayOutputTokens) : '--';
+
+  const contextUsedPercent = usageStats.contextRemainingPercent !== null
+    ? Math.max(0, Math.min(100, 100 - usageStats.contextRemainingPercent))
+    : null;
 
   const scrollToBottom = useCallback(() => {
     const viewport = scrollViewportRef.current;
@@ -1486,16 +1488,29 @@ export function ChatArea() {
                     className="flex-1 min-h-[40px] max-h-[200px] resize-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 text-[0.95rem] placeholder:text-muted-foreground/60"
                     rows={1}
                   />
-                  <div className="shrink-0 rounded-lg border border-border/60 bg-secondary/40 px-2.5 py-1.5 text-[10px] leading-[1.1rem] text-foreground/82">
-                    <div className="text-muted-foreground/85">余量 {contextRemainingPercentLabel}</div>
-                    <div className="mt-0.5 flex items-center gap-2">
+                  <div className="shrink-0 rounded-lg border border-border/60 bg-secondary/40 px-2.5 py-1.5 text-[10px] leading-tight text-foreground/82 min-w-[90px]">
+                    {contextUsedPercent !== null ? (
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <div className="flex-1 h-1.5 rounded-full bg-muted/60 overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all duration-300"
+                            style={{
+                              width: `${contextUsedPercent}%`,
+                              backgroundColor: contextUsedPercent > 90 ? 'hsl(var(--destructive))' : contextUsedPercent > 70 ? 'hsl(var(--chart-4))' : 'hsl(var(--primary))',
+                            }}
+                          />
+                        </div>
+                        <span className="text-muted-foreground/70 tabular-nums">{contextUsedPercent.toFixed(0)}%</span>
+                      </div>
+                    ) : null}
+                    <div className="flex items-center gap-2">
                       <span className="inline-flex items-center gap-0.5">
-                        <ArrowUp className="h-3 w-3 text-primary/85" />
-                        {totalInputTokensLabel}
+                        <ArrowUp className="h-2.5 w-2.5 text-primary/70" />
+                        <span className="tabular-nums">{totalInputTokensLabel}</span>
                       </span>
                       <span className="inline-flex items-center gap-0.5">
-                        <ArrowDown className="h-3 w-3 text-primary/85" />
-                        {totalOutputTokensLabel}
+                        <ArrowDown className="h-2.5 w-2.5 text-primary/70" />
+                        <span className="tabular-nums">{totalOutputTokensLabel}</span>
                       </span>
                     </div>
                   </div>

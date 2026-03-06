@@ -17,6 +17,7 @@ const APPROVAL_TIMEOUT_MS = 120_000;
 interface PendingApproval {
   resolve: (result: PermissionResult) => void;
   timer: ReturnType<typeof setTimeout>;
+  input: Record<string, unknown>;
 }
 
 export class ToolApprovalCoordinator {
@@ -57,7 +58,7 @@ export class ToolApprovalCoordinator {
         resolve({ behavior: 'deny', message: 'Approval timed out' });
       }, APPROVAL_TIMEOUT_MS);
 
-      this.pendingApproval = { resolve, timer };
+      this.pendingApproval = { resolve, timer, input };
 
       const description = Object.entries(input)
         .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
@@ -91,6 +92,7 @@ export class ToolApprovalCoordinator {
     const result: PermissionResult = response.approved
       ? {
           behavior: 'allow',
+          updatedInput: this.pendingApproval.input,
           updatedPermissions: response.updatedPermissions as PermissionUpdate[] | undefined,
         }
       : { behavior: 'deny', message: 'User denied' };

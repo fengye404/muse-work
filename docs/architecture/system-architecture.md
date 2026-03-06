@@ -188,11 +188,11 @@ AgentService
 ```
 AgentService (provider=openai)
     → ensureProxy() → 启动本地 HTTP 代理
-    → overrideUserSettings() → 临时修改 ~/.claude/settings.json
+    → 配置 SDK options.env（ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY）
+    → settingSources=['project','local']（避免读取 ~/.claude/settings.json）
     → SDK query() → 请求发向本地代理
     → 代理将 Anthropic 格式转为 OpenAI 格式 → 转发到目标 API
     → 响应逆向翻译回 Anthropic 格式 → 返回给 SDK
-    → restoreUserSettings() → 恢复原始设置
 ```
 
 ### 5.2 SessionStorage

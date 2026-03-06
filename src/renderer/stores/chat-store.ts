@@ -25,6 +25,8 @@ export type StreamItem = MessageItem;
 export interface RuntimeUsageStats {
   totalInputTokens: number | null;
   totalOutputTokens: number | null;
+  currentTurnInputTokens: number | null;
+  currentTurnOutputTokens: number | null;
   contextWindowTokens: number | null;
   contextRemainingTokens: number | null;
   contextRemainingPercent: number | null;
@@ -33,12 +35,22 @@ export interface RuntimeUsageStats {
 const EMPTY_USAGE_STATS: RuntimeUsageStats = {
   totalInputTokens: null,
   totalOutputTokens: null,
+  currentTurnInputTokens: null,
+  currentTurnOutputTokens: null,
   contextWindowTokens: null,
   contextRemainingTokens: null,
   contextRemainingPercent: null,
 };
 
-function mergeUsageStats(current: RuntimeUsageStats, usage: StreamUsageInfo): RuntimeUsageStats {
+function applyInterimUsage(current: RuntimeUsageStats, usage: StreamUsageInfo): RuntimeUsageStats {
+  return {
+    ...current,
+    currentTurnInputTokens: typeof usage.inputTokens === 'number' ? usage.inputTokens : current.currentTurnInputTokens,
+    currentTurnOutputTokens: typeof usage.outputTokens === 'number' ? usage.outputTokens : current.currentTurnOutputTokens,
+  };
+}
+
+function applyFinalUsage(current: RuntimeUsageStats, usage: StreamUsageInfo): RuntimeUsageStats {
   const turnInputTokens = typeof usage.inputTokens === 'number' ? Math.max(0, usage.inputTokens) : null;
   const turnOutputTokens = typeof usage.outputTokens === 'number' ? Math.max(0, usage.outputTokens) : null;
   return {
@@ -48,6 +60,8 @@ function mergeUsageStats(current: RuntimeUsageStats, usage: StreamUsageInfo): Ru
     totalOutputTokens: turnOutputTokens === null
       ? current.totalOutputTokens
       : (current.totalOutputTokens ?? 0) + turnOutputTokens,
+    currentTurnInputTokens: null,
+    currentTurnOutputTokens: null,
     contextWindowTokens: typeof usage.contextWindowTokens === 'number' ? usage.contextWindowTokens : current.contextWindowTokens,
     contextRemainingTokens: typeof usage.contextRemainingTokens === 'number' ? usage.contextRemainingTokens : current.contextRemainingTokens,
     contextRemainingPercent: typeof usage.contextRemainingPercent === 'number' ? usage.contextRemainingPercent : current.contextRemainingPercent,
@@ -329,7 +343,12 @@ export const useChatStore = create<ChatState>((set, get) => {
 
       electronApiClient.onStreamChunk((chunk) => {
         if (chunk.usage) {
-          set((state) => ({ usageStats: mergeUsageStats(state.usageStats, chunk.usage) }));
+          const isFinal = chunk.type === 'done' || chunk.type === 'error';
+          set((state) => ({
+            usageStats: isFinal
+              ? applyFinalUsage(state.usageStats, chunk.usage!)
+              : applyInterimUsage(state.usageStats, chunk.usage!),
+          }));
         }
         streamListener?.handleChunk(chunk);
       });

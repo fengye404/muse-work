@@ -36,9 +36,6 @@ import type {
   McpServerConfig as AppMcpServerConfig,
   McpServersConfig,
 } from './types';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
 
 // Lazy-loaded SDK functions (ESM module loaded via dynamic import at runtime)
 let _sdkLoaded = false;
@@ -159,78 +156,70 @@ export class AgentService {
     options?: SendMessageOptions,
   ): AsyncGenerator<StreamChunk, void, unknown> {
     const isOpenAI = this.config.provider === 'openai';
+    const settingSources: SDKOptions['settingSources'] = isOpenAI
+      ? ['project', 'local']
+      : ['user', 'project', 'local'];
 
-    if (isOpenAI) {
-      await this.overrideUserSettings();
+    const env = await this.buildEnv();
+
+    const sdkOptions: SDKOptions = {
+      model: this.config.model,
+      cwd: this.workingDirectory,
+      env,
+      tools: { type: 'preset', preset: 'claude_code' },
+      includePartialMessages: true,
+      permissionMode: 'default',
+      settingSources,
+      stderr: (data: string) => {
+        console.error('[claude-code-cli]', data.trimEnd());
+      },
+    };
+
+    if (this.canUseToolCallback) {
+      sdkOptions.canUseTool = this.canUseToolCallback;
     }
 
-    try {
-      const env = await this.buildEnv();
+    if (this.currentSessionId) {
+      sdkOptions.resume = this.currentSessionId;
+    }
 
-      const sdkOptions: SDKOptions = {
-        model: this.config.model,
-        cwd: this.workingDirectory,
-        env,
-        tools: { type: 'preset', preset: 'claude_code' },
-        includePartialMessages: true,
-        permissionMode: 'default',
-        settingSources: ['user', 'project', 'local'],
-        stderr: (data: string) => {
-          console.error('[claude-code-cli]', data.trimEnd());
-        },
+    if (Object.keys(this.mcpServersConfig).length > 0) {
+      sdkOptions.mcpServers = this.mcpServersConfig;
+    }
+
+    if (options?.systemPrompt) {
+      sdkOptions.systemPrompt = {
+        type: 'preset',
+        preset: 'claude_code',
+        append: options.systemPrompt,
       };
+    }
 
-      if (this.canUseToolCallback) {
-        sdkOptions.canUseTool = this.canUseToolCallback;
-      }
+    await loadSDK();
+    console.log(`[agent-service] Starting query: model=${this.config.model}, provider=${this.config.provider}, cwd=${this.workingDirectory}`);
 
-      if (this.currentSessionId) {
-        sdkOptions.resume = this.currentSessionId;
-      }
+    const prompt = this.buildPrompt(message, options?.attachments);
+    const q = _query({ prompt, options: sdkOptions });
+    this.activeQuery = q;
 
-      if (Object.keys(this.mcpServersConfig).length > 0) {
-        sdkOptions.mcpServers = this.mcpServersConfig;
-      }
-
-      if (options?.systemPrompt) {
-        sdkOptions.systemPrompt = {
-          type: 'preset',
-          preset: 'claude_code',
-          append: options.systemPrompt,
-        };
-      }
-
-      await loadSDK();
-      console.log(`[agent-service] Starting query: model=${this.config.model}, provider=${this.config.provider}, cwd=${this.workingDirectory}`);
-
-      const prompt = this.buildPrompt(message, options?.attachments);
-      const q = _query({ prompt, options: sdkOptions });
-      this.activeQuery = q;
-
-      try {
-        for await (const msg of q) {
-          const chunks = this.mapSdkMessageToChunks(msg);
-          for (const chunk of chunks) {
-            yield chunk;
-          }
+    try {
+      for await (const msg of q) {
+        const chunks = this.mapSdkMessageToChunks(msg);
+        for (const chunk of chunks) {
+          yield chunk;
         }
-        console.log('[agent-service] Query stream finished normally');
-      } catch (err) {
-        console.error('[agent-service] Query stream error:', err);
-        throw err;
-      } finally {
-        this.activeQuery = null;
       }
+      console.log('[agent-service] Query stream finished normally');
+    } catch (err) {
+      console.error('[agent-service] Query stream error:', err);
+      throw err;
     } finally {
-      if (isOpenAI) {
-        this.restoreUserSettings();
-      }
+      this.activeQuery = null;
     }
   }
 
   async cleanup(): Promise<void> {
     this.abort();
-    this.restoreUserSettings();
     await this.stopProxy();
   }
 
@@ -277,7 +266,7 @@ export class AgentService {
       message: {
         role: 'user',
         content: contentBlocks,
-      } as SDKUserMessage['message'],
+      } as unknown as SDKUserMessage['message'],
       parent_tool_use_id: null,
       session_id: this.currentSessionId || '',
     };
@@ -310,69 +299,6 @@ export class AgentService {
     env.DEBUG_CLAUDE_AGENT_SDK = '1';
 
     return env;
-  }
-
-  // ---------------------------------------------------------------------------
-  // User settings override for OpenAI provider
-  // ---------------------------------------------------------------------------
-
-  private savedUserSettings: string | null = null;
-
-  private getUserSettingsPath(): string {
-    return path.join(os.homedir(), '.claude', 'settings.json');
-  }
-
-  /**
-   * Temporarily override ~/.claude/settings.json env entries so the CLI
-   * subprocess uses our local protocol translation proxy rather than
-   * whatever base URL the user may have configured for Claude Code itself.
-   */
-  private async overrideUserSettings(): Promise<void> {
-    const settingsPath = this.getUserSettingsPath();
-
-    try {
-      const proxy = await this.ensureProxy();
-
-      if (fs.existsSync(settingsPath)) {
-        this.savedUserSettings = fs.readFileSync(settingsPath, 'utf8');
-      } else {
-        this.savedUserSettings = null;
-      }
-
-      const settings = this.savedUserSettings
-        ? JSON.parse(this.savedUserSettings)
-        : {};
-
-      settings.env = {
-        ...(settings.env || {}),
-        ANTHROPIC_BASE_URL: proxy.baseURL,
-        ANTHROPIC_API_KEY: 'proxy-key-not-used',
-      };
-      delete settings.env.ANTHROPIC_AUTH_TOKEN;
-
-      const dir = path.dirname(settingsPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-      console.log(`[agent-service] Overrode user settings: ANTHROPIC_BASE_URL → ${proxy.baseURL}`);
-    } catch (err) {
-      console.error('[agent-service] Failed to override user settings:', err);
-    }
-  }
-
-  private restoreUserSettings(): void {
-    const settingsPath = this.getUserSettingsPath();
-
-    try {
-      if (this.savedUserSettings !== null) {
-        fs.writeFileSync(settingsPath, this.savedUserSettings);
-        console.log('[agent-service] Restored original user settings');
-      }
-      this.savedUserSettings = null;
-    } catch (err) {
-      console.error('[agent-service] Failed to restore user settings:', err);
-    }
   }
 
   private async ensureProxy(): Promise<ProxyServerHandle> {
@@ -416,11 +342,23 @@ export class AgentService {
    */
   private streamedToolIds = new Set<string>();
 
+  /**
+   * Per-turn accumulated token counters tracked from stream events
+   * (message_start / message_delta). Used as both a real-time source
+   * and a fallback when the SDK result message lacks usage data.
+   */
+  private turnInputTokens = 0;
+  private turnOutputTokens = 0;
+  private turnHasStreamUsage = false;
+
   private resetStreamingState(): void {
     this.contentBlockToolMap.clear();
     this.contentBlockAccumulator.clear();
     this.streamedToolIds.clear();
     this.hasStreamedText = false;
+    this.turnInputTokens = 0;
+    this.turnOutputTokens = 0;
+    this.turnHasStreamUsage = false;
   }
 
   private mapSdkMessageToChunks(msg: SDKMessage): StreamChunk[] {
@@ -593,8 +531,43 @@ export class AgentService {
         break;
       }
 
-      case 'message_start':
-      case 'message_delta':
+      case 'message_start': {
+        const msgBody = eventAny.message as Record<string, unknown> | undefined;
+        const startUsage = this.toRecord(msgBody?.usage);
+        if (startUsage) {
+          const inputTokens = this.readNumber(startUsage, 'input_tokens', 'inputTokens') ?? 0;
+          this.turnInputTokens += inputTokens;
+          this.turnHasStreamUsage = true;
+          chunks.push({
+            type: 'usage',
+            content: '',
+            usage: {
+              inputTokens: this.turnInputTokens,
+              outputTokens: this.turnOutputTokens,
+            },
+          });
+        }
+        break;
+      }
+
+      case 'message_delta': {
+        const deltaUsage = this.toRecord(eventAny.usage);
+        if (deltaUsage) {
+          const outputTokens = this.readNumber(deltaUsage, 'output_tokens', 'outputTokens') ?? 0;
+          this.turnOutputTokens += outputTokens;
+          this.turnHasStreamUsage = true;
+          chunks.push({
+            type: 'usage',
+            content: '',
+            usage: {
+              inputTokens: this.turnInputTokens,
+              outputTokens: this.turnOutputTokens,
+            },
+          });
+        }
+        break;
+      }
+
       case 'message_stop':
         break;
 
@@ -614,7 +587,7 @@ export class AgentService {
 
     if (!msgParam || typeof msgParam !== 'object') return chunks;
 
-    const content = (msgParam as Record<string, unknown>).content;
+    const content = (msgParam as unknown as Record<string, unknown>).content;
     if (!Array.isArray(content)) return chunks;
 
     for (const block of content) {
@@ -683,44 +656,60 @@ export class AgentService {
 
   private buildUsagePayload(msg: SDKResultSuccess | SDKResultError): StreamChunk['usage'] | undefined {
     const usageRecord = this.toRecord((msg as unknown as Record<string, unknown>).usage);
-    if (!usageRecord) return undefined;
 
-    const usageInputTokens = this.readNumber(usageRecord, 'input_tokens', 'inputTokens', 'prompt_tokens', 'promptTokens');
-    const usageOutputTokens = this.readNumber(usageRecord, 'output_tokens', 'outputTokens', 'completion_tokens', 'completionTokens');
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let contextWindowTokens: number | undefined;
+    let contextUsedTokens: number | undefined;
 
-    const modelUsageContainer = this.toRecord((msg as unknown as Record<string, unknown>).modelUsage)
-      ?? this.toRecord((msg as unknown as Record<string, unknown>).model_usage);
+    if (usageRecord) {
+      const usageInputTokens = this.readNumber(usageRecord, 'input_tokens', 'inputTokens', 'prompt_tokens', 'promptTokens');
+      const usageOutputTokens = this.readNumber(usageRecord, 'output_tokens', 'outputTokens', 'completion_tokens', 'completionTokens');
 
-    const modelUsageEntries = Object.values(modelUsageContainer ?? {})
-      .map((entry) => this.toRecord(entry))
-      .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+      const modelUsageContainer = this.toRecord((msg as unknown as Record<string, unknown>).modelUsage)
+        ?? this.toRecord((msg as unknown as Record<string, unknown>).model_usage);
 
-    const aggregatedInputTokens = modelUsageEntries.reduce((sum, current) => {
-      return sum + (this.readNumber(current, 'inputTokens', 'input_tokens') ?? 0);
-    }, 0);
-    const aggregatedOutputTokens = modelUsageEntries.reduce((sum, current) => {
-      return sum + (this.readNumber(current, 'outputTokens', 'output_tokens') ?? 0);
-    }, 0);
+      const modelUsageEntries = Object.values(modelUsageContainer ?? {})
+        .map((entry) => this.toRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry));
 
-    const inputTokens = aggregatedInputTokens > 0 ? aggregatedInputTokens : (usageInputTokens ?? 0);
-    const outputTokens = aggregatedOutputTokens > 0 ? aggregatedOutputTokens : (usageOutputTokens ?? 0);
+      const aggregatedInputTokens = modelUsageEntries.reduce((sum, current) => {
+        return sum + (this.readNumber(current, 'inputTokens', 'input_tokens') ?? 0);
+      }, 0);
+      const aggregatedOutputTokens = modelUsageEntries.reduce((sum, current) => {
+        return sum + (this.readNumber(current, 'outputTokens', 'output_tokens') ?? 0);
+      }, 0);
 
-    const primaryModelUsage = modelUsageEntries.reduce<Record<string, unknown> | null>((selected, current) => {
-      const currentWindow = this.readNumber(current, 'contextWindow', 'context_window') ?? 0;
-      if (currentWindow <= 0) return selected;
-      if (!selected) return current;
-      const selectedWindow = this.readNumber(selected, 'contextWindow', 'context_window') ?? 0;
-      return currentWindow > selectedWindow ? current : selected;
-    }, null);
+      inputTokens = aggregatedInputTokens > 0 ? aggregatedInputTokens : (usageInputTokens ?? 0);
+      outputTokens = aggregatedOutputTokens > 0 ? aggregatedOutputTokens : (usageOutputTokens ?? 0);
 
-    const contextWindowTokens = primaryModelUsage
-      ? this.readNumber(primaryModelUsage, 'contextWindow', 'context_window')
-      : this.readNumber(usageRecord, 'contextWindow', 'context_window');
+      const primaryModelUsage = modelUsageEntries.reduce<Record<string, unknown> | null>((selected, current) => {
+        const currentWindow = this.readNumber(current, 'contextWindow', 'context_window') ?? 0;
+        if (currentWindow <= 0) return selected;
+        if (!selected) return current;
+        const selectedWindow = this.readNumber(selected, 'contextWindow', 'context_window') ?? 0;
+        return currentWindow > selectedWindow ? current : selected;
+      }, null);
 
-    const contextUsedTokens = primaryModelUsage
-      ? (this.readNumber(primaryModelUsage, 'inputTokens', 'input_tokens') ?? 0)
-        + (this.readNumber(primaryModelUsage, 'outputTokens', 'output_tokens') ?? 0)
-      : undefined;
+      contextWindowTokens = primaryModelUsage
+        ? this.readNumber(primaryModelUsage, 'contextWindow', 'context_window')
+        : this.readNumber(usageRecord, 'contextWindow', 'context_window');
+
+      contextUsedTokens = primaryModelUsage
+        ? (this.readNumber(primaryModelUsage, 'inputTokens', 'input_tokens') ?? 0)
+          + (this.readNumber(primaryModelUsage, 'outputTokens', 'output_tokens') ?? 0)
+        : undefined;
+    }
+
+    if (inputTokens === 0 && outputTokens === 0 && this.turnHasStreamUsage) {
+      inputTokens = this.turnInputTokens;
+      outputTokens = this.turnOutputTokens;
+      console.log(`[agent-service] Using stream-tracked usage: input=${inputTokens}, output=${outputTokens}`);
+    }
+
+    if (inputTokens === 0 && outputTokens === 0 && !contextWindowTokens) {
+      return undefined;
+    }
 
     const contextRemainingTokens = (
       typeof contextWindowTokens === 'number' && typeof contextUsedTokens === 'number'
