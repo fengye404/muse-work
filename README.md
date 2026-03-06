@@ -1,73 +1,162 @@
-# AI Desktop Assistant
+<div align="center">
+  <img src="./public/branding/app-icon-desktop.png" alt="AI Desktop Assistant Logo" width="96" />
+  <h1>AI Desktop Assistant</h1>
+  <p>
+    A desktop AI workspace powered by <strong>Claude Agent SDK</strong>, built with Electron + React + TypeScript.
+  </p>
+  <p>
+    <a href="./README.zh-CN.md">简体中文</a> | English
+  </p>
+</div>
 
-[简体中文](./README.zh-CN.md) | English
+<p align="center">
+  <a href="https://github.com/fengye404/ai-desktop-assistant/releases">
+    <img alt="Release" src="https://img.shields.io/github/v/release/fengye404/ai-desktop-assistant?label=release" />
+  </a>
+  <a href="https://github.com/fengye404/ai-desktop-assistant/blob/main/LICENSE">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-22c55e" />
+  </a>
+  <img alt="Electron" src="https://img.shields.io/badge/Electron-28-47848F?logo=electron&logoColor=white" />
+  <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" />
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white" />
+  <a href="https://github.com/fengye404/ai-desktop-assistant/stargazers">
+    <img alt="Stars" src="https://img.shields.io/github/stars/fengye404/ai-desktop-assistant" />
+  </a>
+  <a href="https://github.com/fengye404/ai-desktop-assistant/issues">
+    <img alt="Issues" src="https://img.shields.io/github/issues/fengye404/ai-desktop-assistant" />
+  </a>
+</p>
 
-![Version](https://img.shields.io/badge/version-2.0.1-4c1)
-![Electron](https://img.shields.io/badge/Electron-28-47848F?logo=electron&logoColor=white)
-![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)
-![License](https://img.shields.io/badge/license-MIT-22c55e)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-6b7280)
+## Table Of Contents
 
-An AI desktop assistant built on the **Claude Agent SDK**, with Electron + React + TypeScript.
+- [Why This Project](#why-this-project)
+- [Key Features](#key-features)
+- [Architecture At A Glance](#architecture-at-a-glance)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Scripts](#scripts)
+- [Documentation](#documentation)
+- [Project Structure](#project-structure)
+- [Contributing](#contributing)
+- [License](#license)
 
-## Highlights
+## Why This Project
 
-- **Agent SDK-driven**: AI interaction, tool execution, and session management powered by Claude Agent SDK
-- **Multi-provider**: Anthropic direct + OpenAI-compatible endpoints via protocol translation proxy
-- **Streaming**: Real-time response rendering with tool call cards and inline approval
-- **MCP support**: Dynamic tool extension via Stdio/SSE/HTTP transports
-- **Secure storage**: API keys encrypted with Electron `safeStorage`
-- **Modern UI**: React 19 + Tailwind CSS v4 + Glassmorphism design
+AI Desktop Assistant focuses on one workflow: keep AI-assisted development inside a native desktop app, with secure local config, streaming tool feedback, and extensible MCP integration.
 
-## Tech Stack
+Compared to a plain web chat, this project gives you:
 
-| Layer | Technology |
-|-------|-----------|
-| Desktop | Electron 28 |
-| Language | TypeScript 5.3 |
-| UI | React 19, Radix UI (shadcn), Tailwind CSS v4 |
-| State | Zustand |
-| AI | @anthropic-ai/claude-agent-sdk |
-| Build | Vite 7 (renderer) + esbuild (main) |
-| Database | SQLite (better-sqlite3) |
-| Packaging | electron-builder |
+- Native desktop experience (Electron)
+- Real-time tool execution feedback in chat
+- SDK-native session handling and sandbox mode
+- Multi-provider model access (Anthropic + OpenAI-compatible)
+
+## Key Features
+
+- Claude Agent SDK as the execution core
+- Multi-provider model routing
+  - Anthropic direct
+  - OpenAI-compatible endpoints via protocol translator
+- Streaming conversation and tool-call timeline
+- Inline tool approval and permission controls
+- MCP server integration (stdio / SSE / HTTP)
+- Runtime sandbox controls (`local` / `sandbox`)
+- API key protection using Electron `safeStorage`
+
+## Architecture At A Glance
+
+```mermaid
+flowchart LR
+  A["Renderer (React + Zustand)"] -->|"IPC"| B["Main Process"]
+  B --> C["AgentService (Claude Agent SDK)"]
+  B --> D["SessionStorage (SQLite config/meta)"]
+  C --> E["Anthropic API"]
+  C --> F["OpenAI-compatible API via protocol translator"]
+  C --> G["MCP servers"]
+```
 
 ## Quick Start
 
+### Prerequisites
+
+- Node.js LTS
+- npm
+- macOS or Windows
+
+### Run From Source
+
 ```bash
 npm install
+npm run dev
+```
+
+### Build And Run
+
+```bash
+npm run build
 npm start
 ```
 
 ## Configuration
 
-Configure your provider in **Settings**:
+Open `Settings` in the app and configure:
 
-- Provider: Anthropic or OpenAI-compatible
+- Provider: `anthropic` or `openai`
 - Model: e.g. `claude-sonnet-4-6`, `gpt-4o`, `deepseek-chat`
-- API Key: encrypted with Electron `safeStorage`
+- API Key: encrypted and stored with `safeStorage`
 - Base URL: required for OpenAI-compatible endpoints
 
 ## Scripts
 
-```bash
-npm run dev              # Dev mode (hot reload)
-npm run build            # Build main + renderer
-npm run lint             # Lint
-npm run test:chat-stream # Run tests
-npm run dist             # Package app
-npm run dist:mac         # Package for macOS
-npm run dist:win         # Package for Windows
-```
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Start Electron + renderer dev workflow |
+| `npm run build` | Build main and renderer bundles |
+| `npm run start` | Build and launch desktop app |
+| `npm run lint` | Run ESLint |
+| `npm run typecheck` | Type-check main + renderer |
+| `npm run test` | Run renderer/main tests |
+| `npm run ci:verify` | Full CI verification locally |
+| `npm run dist` | Package app with electron-builder |
+| `npm run dist:mac` | Build macOS package |
+| `npm run dist:win` | Build Windows package |
 
 ## Documentation
 
 - [Docs Home](./docs/README.md)
 - [System Architecture](./docs/architecture/system-architecture.md)
-- [Architecture](./docs/architecture/README.md)
+- [Architecture Notes](./docs/architecture/README.md)
+- [Feature Docs](./docs/features/README.md)
 - [Guides](./docs/guides/README.md)
 - [API Reference](./docs/api/README.md)
+- [Roadmap](./docs/roadmap.md)
+
+## Project Structure
+
+```text
+src/
+  main.ts                       Electron entry
+  preload.ts                    IPC bridge
+  agent-service.ts              Claude Agent SDK integration
+  session-storage.ts            SQLite config/session metadata
+  main-process/                 Main-process modules (IPC, MCP, skills, approvals)
+  renderer/                     React app (components, stores, services)
+docs/                           Product and architecture docs
+scripts/                        Build/release scripts
+public/branding/                App branding assets
+```
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+- Report bugs: [Issues](https://github.com/fengye404/ai-desktop-assistant/issues)
+- Suggest features: [Issues](https://github.com/fengye404/ai-desktop-assistant/issues)
+- Before opening a PR, run:
+
+```bash
+npm run ci:verify
+```
 
 ## License
 
