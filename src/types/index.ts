@@ -2,6 +2,8 @@
  * Centralized type definitions for AI Desktop Assistant
  */
 
+import type { SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
+
 /**
  * Supported AI providers
  */
@@ -133,6 +135,38 @@ export interface ModelProvidersConfig {
   activeProviderId: string | null;
   activeModelId: string | null;
   providers: ModelProvider[];
+}
+
+/**
+ * Runtime execution mode
+ */
+export type ExecutionMode = 'local' | 'sandbox';
+
+/**
+ * Sandbox execution configuration
+ */
+export interface SandboxConfig {
+  mode: ExecutionMode;
+  sandboxSettings: SandboxSettings;
+}
+
+/**
+ * Skill metadata discovered from SKILL.md files
+ */
+export interface SkillInfo {
+  id: string;
+  name: string;
+  description: string;
+  source: 'workspace' | 'home' | 'codex';
+  path: string;
+}
+
+/**
+ * Runtime app settings outside provider/model config
+ */
+export interface RuntimeConfig {
+  sandbox: SandboxConfig;
+  enabledSkillIds: string[];
 }
 
 /**
@@ -343,6 +377,8 @@ export const IPC_CHANNELS = {
   // Config management
   CONFIG_SAVE: 'config-save',
   CONFIG_LOAD: 'config-load',
+  RUNTIME_CONFIG_SAVE: 'runtime-config-save',
+  RUNTIME_CONFIG_LOAD: 'runtime-config-load',
 
   // MCP management
   MCP_LIST_SERVERS: 'mcp-list-servers',
@@ -350,6 +386,9 @@ export const IPC_CHANNELS = {
   MCP_REFRESH: 'mcp-refresh',
   MCP_UPSERT_SERVER: 'mcp-upsert-server',
   MCP_REMOVE_SERVER: 'mcp-remove-server',
+
+  // Skills
+  SKILL_LIST: 'skill-list',
 
   // Tool system
   TOOL_APPROVAL_REQUEST: 'tool-approval-request',
@@ -393,6 +432,8 @@ export interface ElectronAPI {
   // Config management
   configSave: (config: ModelProvidersConfig) => Promise<boolean>;
   configLoad: () => Promise<ModelProvidersConfig>;
+  runtimeConfigSave: (config: RuntimeConfig) => Promise<boolean>;
+  runtimeConfigLoad: () => Promise<RuntimeConfig>;
 
   // MCP management
   mcpListServers: () => Promise<McpServerStatus[]>;
@@ -400,6 +441,9 @@ export interface ElectronAPI {
   mcpRefresh: () => Promise<McpRefreshResult>;
   mcpUpsertServer: (name: string, config: McpServerConfig) => Promise<McpRefreshResult>;
   mcpRemoveServer: (name: string) => Promise<McpRefreshResult>;
+
+  // Skills
+  skillList: () => Promise<SkillInfo[]>;
 
   // Tool system
   onToolApprovalRequest: (callback: (request: ToolApprovalRequest) => void) => void;

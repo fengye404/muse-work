@@ -32,6 +32,8 @@ import type {
   McpToolInfo,
   Provider,
   ModelProvider,
+  RuntimeConfig,
+  SkillInfo,
 } from '../../types';
 import { useConfigStore, ALL_TOOLS } from '@/stores/config-store';
 import { cn } from '@/lib/utils';
@@ -49,7 +51,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_system_info: '读取运行环境与系统信息',
 };
 
-type PrimaryMenuKey = 'general' | 'tools' | 'mcp';
+type PrimaryMenuKey = 'general' | 'tools' | 'sandbox' | 'skills' | 'mcp';
 type GeneralSubMenuKey = 'providers' | 'connection';
 type ToolsSubMenuKey = 'permissions';
 type McpSubMenuKey = 'servers' | 'loadedTools';
@@ -76,8 +78,20 @@ const PRIMARY_MENU_ITEMS: PrimaryMenuItem[] = [
   {
     key: 'tools',
     label: '工具权限',
-    description: '自动执行策略',
+    description: '工具执行策略',
     icon: Wrench,
+  },
+  {
+    key: 'sandbox',
+    label: '沙箱环境',
+    description: '命令隔离执行',
+    icon: Wrench,
+  },
+  {
+    key: 'skills',
+    label: 'Skill 管理',
+    description: '技能启用与检索',
+    icon: Layers3,
   },
   {
     key: 'mcp',
@@ -100,6 +114,29 @@ const MCP_SUB_MENUS: SubMenuItem<McpSubMenuKey>[] = [
   { key: 'servers', label: '服务器管理' },
   { key: 'loadedTools', label: '已加载工具' },
 ];
+
+const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
+  sandbox: {
+    mode: 'local',
+    sandboxSettings: {
+      enabled: false,
+      allowUnsandboxedCommands: false,
+    },
+  },
+  enabledSkillIds: [],
+};
+
+function parseLineList(raw: string): string[] {
+  return raw
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function formatLineList(items?: string[]): string {
+  if (!items || items.length === 0) return '';
+  return items.join('\n');
+}
 
 function renderServerTarget(server: McpServerStatus): string {
   if (server.transport === 'stdio') {
@@ -401,6 +438,12 @@ export function SettingsDialog() {
   const [mcpArgs, setMcpArgs] = useState('');
   const [mcpUrl, setMcpUrl] = useState('');
   const [mcpHeadersText, setMcpHeadersText] = useState('');
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig>(DEFAULT_RUNTIME_CONFIG);
+  const [runtimeLoaded, setRuntimeLoaded] = useState(false);
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
+  const [runtimeMessage, setRuntimeMessage] = useState('');
+  const [skillItems, setSkillItems] = useState<SkillInfo[]>([]);
+  const [skillQuery, setSkillQuery] = useState('');
 
   const loadMcpSnapshot = useCallback(async () => {
     try {
@@ -423,6 +466,35 @@ export function SettingsDialog() {
     void loadMcpSnapshot();
   }, [isSettingsOpen, activePrimary, loadMcpSnapshot]);
 
+  const loadRuntimeSnapshot = useCallback(async () => {
+    try {
+      const config = await electronApiClient.runtimeConfigLoad();
+      setRuntimeConfig(config);
+      setRuntimeLoaded(true);
+      setRuntimeMessage('');
+    } catch (error) {
+      setRuntimeLoaded(false);
+      const message = error instanceof Error ? error.message : String(error);
+      setRuntimeMessage(`读取运行时设置失败：${message}`);
+    }
+  }, []);
+
+  const loadSkillSnapshot = useCallback(async () => {
+    try {
+      const skills = await electronApiClient.skillList();
+      setSkillItems(skills);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRuntimeMessage(`读取技能列表失败：${message}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isSettingsOpen) return;
+    void loadRuntimeSnapshot();
+    void loadSkillSnapshot();
+  }, [isSettingsOpen, loadRuntimeSnapshot, loadSkillSnapshot]);
+
   useEffect(() => {
     if (!isSettingsOpen) return;
     setActivePrimary('general');
@@ -430,6 +502,8 @@ export function SettingsDialog() {
     setActiveToolsSubMenu('permissions');
     setActiveMcpSubMenu('servers');
     setExpandedProviderId(null);
+    setRuntimeMessage('');
+    setSkillQuery('');
   }, [isSettingsOpen]);
 
   const handleRefreshMcp = useCallback(async () => {
@@ -559,16 +633,131 @@ export function SettingsDialog() {
     if (activePrimary === 'general') {
       return GENERAL_SUB_MENUS.find((item) => item.key === activeGeneralSubMenu)?.label ?? '';
     }
-    if (activePrimary === 'tools') {
+    if (activePrimary === 'tools' && TOOLS_SUB_MENUS.length > 1) {
       return TOOLS_SUB_MENUS.find((item) => item.key === activeToolsSubMenu)?.label ?? '';
     }
-    return MCP_SUB_MENUS.find((item) => item.key === activeMcpSubMenu)?.label ?? '';
+    if (activePrimary === 'mcp') {
+      return MCP_SUB_MENUS.find((item) => item.key === activeMcpSubMenu)?.label ?? '';
+    }
+    return '';
   }, [activePrimary, activeGeneralSubMenu, activeToolsSubMenu, activeMcpSubMenu]);
 
   const activeProviderName = useMemo(() => {
     const p = providers.find((item) => item.id === activeProviderId);
     return p?.name || '未选择';
   }, [providers, activeProviderId]);
+
+  const enabledSkillCount = useMemo(() => {
+    return new Set(runtimeConfig.enabledSkillIds).size;
+  }, [runtimeConfig.enabledSkillIds]);
+
+  const filteredSkillItems = useMemo(() => {
+    const query = skillQuery.trim().toLowerCase();
+    if (!query) return skillItems;
+    return skillItems.filter((skill) =>
+      skill.id.toLowerCase().includes(query) ||
+      skill.name.toLowerCase().includes(query) ||
+      skill.description.toLowerCase().includes(query),
+    );
+  }, [skillItems, skillQuery]);
+
+  const updateSandboxConfig = useCallback((patch: Partial<RuntimeConfig['sandbox']>) => {
+    setRuntimeConfig((prev) => ({
+      ...prev,
+      sandbox: {
+        ...prev.sandbox,
+        ...patch,
+      },
+    }));
+  }, []);
+
+  const updateSandboxSettings = useCallback((patch: Partial<RuntimeConfig['sandbox']['sandboxSettings']>) => {
+    setRuntimeConfig((prev) => ({
+      ...prev,
+      sandbox: {
+        ...prev.sandbox,
+        sandboxSettings: {
+          ...prev.sandbox.sandboxSettings,
+          ...patch,
+        },
+      },
+    }));
+  }, []);
+
+  const updateSandboxNetwork = useCallback((patch: Partial<NonNullable<RuntimeConfig['sandbox']['sandboxSettings']['network']>>) => {
+    setRuntimeConfig((prev) => ({
+      ...prev,
+      sandbox: {
+        ...prev.sandbox,
+        sandboxSettings: {
+          ...prev.sandbox.sandboxSettings,
+          network: {
+            ...(prev.sandbox.sandboxSettings.network ?? {}),
+            ...patch,
+          },
+        },
+      },
+    }));
+  }, []);
+
+  const updateSandboxFilesystem = useCallback((patch: Partial<NonNullable<RuntimeConfig['sandbox']['sandboxSettings']['filesystem']>>) => {
+    setRuntimeConfig((prev) => ({
+      ...prev,
+      sandbox: {
+        ...prev.sandbox,
+        sandboxSettings: {
+          ...prev.sandbox.sandboxSettings,
+          filesystem: {
+            ...(prev.sandbox.sandboxSettings.filesystem ?? {}),
+            ...patch,
+          },
+        },
+      },
+    }));
+  }, []);
+
+  const toggleSkill = useCallback((skillId: string) => {
+    setRuntimeConfig((prev) => {
+      const enabled = new Set(prev.enabledSkillIds);
+      if (enabled.has(skillId)) enabled.delete(skillId);
+      else enabled.add(skillId);
+      return {
+        ...prev,
+        enabledSkillIds: Array.from(enabled),
+      };
+    });
+  }, []);
+
+  const handleRefreshSkills = useCallback(async () => {
+    setRuntimeBusy(true);
+    try {
+      await loadSkillSnapshot();
+      setRuntimeMessage('技能列表已刷新');
+    } catch {
+      // message handled in loader
+    } finally {
+      setRuntimeBusy(false);
+    }
+  }, [loadSkillSnapshot]);
+
+  const handleSaveAllSettings = useCallback(async () => {
+    if (!runtimeLoaded) {
+      setRuntimeMessage('运行时配置尚未加载完成，请稍后再试。');
+      return;
+    }
+
+    try {
+      setRuntimeBusy(true);
+      setRuntimeMessage('');
+      await electronApiClient.runtimeConfigSave(runtimeConfig);
+      await saveConfig();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRuntimeMessage(`保存运行时设置失败：${message}`);
+    } finally {
+      setRuntimeBusy(false);
+    }
+  }, [runtimeConfig, runtimeLoaded, saveConfig]);
 
   return (
     <Dialog open={isSettingsOpen} onOpenChange={setSettingsOpen}>
@@ -664,7 +853,7 @@ export function SettingsDialog() {
                     onChange={setActiveGeneralSubMenu}
                   />
                 )}
-                {activePrimary === 'tools' && (
+                {activePrimary === 'tools' && TOOLS_SUB_MENUS.length > 1 && (
                   <SecondaryMenu
                     items={TOOLS_SUB_MENUS}
                     active={activeToolsSubMenu}
@@ -860,6 +1049,294 @@ export function SettingsDialog() {
                       );
                     })}
                   </div>
+                </div>
+              )}
+
+              {activePrimary === 'sandbox' && (
+                <div className="settings-panel-enter space-y-3">
+                  <div className="rounded-2xl border border-border/60 bg-[linear-gradient(168deg,hsl(var(--secondary)/0.42),hsl(var(--background)/0.36))] p-4 sm:p-5">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <Wrench className="h-4 w-4 text-muted-foreground" />
+                        <p className="text-sm font-semibold text-foreground/95">沙箱执行环境</p>
+                      </div>
+                      <span className="rounded-full border border-border/60 bg-background/45 px-3 py-1 text-xs text-muted-foreground">
+                        模式: {runtimeConfig.sandbox.mode === 'sandbox' ? 'Sandbox' : 'Local'}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                      通过 Claude Agent SDK `options.sandbox` 控制沙箱。应用层不再包装 Docker 命令。
+                    </p>
+                  </div>
+
+                  <div className="inline-flex w-full rounded-xl border border-border/60 bg-secondary/35 p-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateSandboxConfig({ mode: 'local' });
+                        updateSandboxSettings({ enabled: false });
+                      }}
+                      aria-pressed={runtimeConfig.sandbox.mode === 'local'}
+                      className={cn(
+                        'flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-all duration-200',
+                        runtimeConfig.sandbox.mode === 'local'
+                          ? 'border-primary/52 bg-[linear-gradient(135deg,hsl(var(--primary)/0.58),hsl(var(--cool-accent)/0.44))] text-primary-foreground'
+                          : 'border-transparent text-muted-foreground hover:bg-secondary/65 hover:text-foreground',
+                      )}
+                    >
+                      本地模式
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateSandboxConfig({ mode: 'sandbox' });
+                        updateSandboxSettings({ enabled: true });
+                      }}
+                      aria-pressed={runtimeConfig.sandbox.mode === 'sandbox'}
+                      className={cn(
+                        'flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-all duration-200',
+                        runtimeConfig.sandbox.mode === 'sandbox'
+                          ? 'border-primary/52 bg-[linear-gradient(135deg,hsl(var(--primary)/0.58),hsl(var(--cool-accent)/0.44))] text-primary-foreground'
+                          : 'border-transparent text-muted-foreground hover:bg-secondary/65 hover:text-foreground',
+                      )}
+                    >
+                      沙箱模式（SDK）
+                    </button>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-foreground/90">sandboxSettings.enabled</label>
+                      <button
+                        type="button"
+                        onClick={() => updateSandboxSettings({
+                          enabled: runtimeConfig.sandbox.sandboxSettings.enabled !== true,
+                        })}
+                        aria-pressed={runtimeConfig.sandbox.sandboxSettings.enabled === true}
+                        className={cn(
+                          'flex h-10 w-full items-center justify-between rounded-lg border px-3 text-sm transition-all',
+                          runtimeConfig.sandbox.sandboxSettings.enabled
+                            ? 'border-primary/45 bg-primary/15 text-foreground'
+                            : 'border-border/65 bg-background/35 text-muted-foreground',
+                        )}
+                      >
+                        <span>{runtimeConfig.sandbox.sandboxSettings.enabled ? '沙箱已启用' : '沙箱已禁用'}</span>
+                        <span className="text-xs">{runtimeConfig.sandbox.sandboxSettings.enabled ? 'ON' : 'OFF'}</span>
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-foreground/90">allowUnsandboxedCommands</label>
+                      <button
+                        type="button"
+                        onClick={() => updateSandboxSettings({
+                          allowUnsandboxedCommands: runtimeConfig.sandbox.sandboxSettings.allowUnsandboxedCommands !== true,
+                        })}
+                        aria-pressed={runtimeConfig.sandbox.sandboxSettings.allowUnsandboxedCommands === true}
+                        className={cn(
+                          'flex h-10 w-full items-center justify-between rounded-lg border px-3 text-sm transition-all',
+                          runtimeConfig.sandbox.sandboxSettings.allowUnsandboxedCommands
+                            ? 'border-primary/45 bg-primary/15 text-foreground'
+                            : 'border-border/65 bg-background/35 text-muted-foreground',
+                        )}
+                      >
+                        <span>{runtimeConfig.sandbox.sandboxSettings.allowUnsandboxedCommands ? '允许未沙箱命令' : '仅允许沙箱命令'}</span>
+                        <span className="text-xs">{runtimeConfig.sandbox.sandboxSettings.allowUnsandboxedCommands ? 'ON' : 'OFF'}</span>
+                      </button>
+                    </div>
+                    <div className="space-y-2 sm:col-span-2">
+                      <label className="text-xs font-medium text-foreground/90">network.allowManagedDomainsOnly</label>
+                      <button
+                        type="button"
+                        onClick={() => updateSandboxNetwork({
+                          allowManagedDomainsOnly: runtimeConfig.sandbox.sandboxSettings.network?.allowManagedDomainsOnly !== true,
+                        })}
+                        aria-pressed={runtimeConfig.sandbox.sandboxSettings.network?.allowManagedDomainsOnly === true}
+                        className={cn(
+                          'flex h-10 w-full items-center justify-between rounded-lg border px-3 text-sm transition-all',
+                          runtimeConfig.sandbox.sandboxSettings.network?.allowManagedDomainsOnly
+                            ? 'border-primary/45 bg-primary/15 text-foreground'
+                            : 'border-border/65 bg-background/35 text-muted-foreground',
+                        )}
+                      >
+                        <span>
+                          {runtimeConfig.sandbox.sandboxSettings.network?.allowManagedDomainsOnly
+                            ? '仅允许托管域名'
+                            : '允许非托管域名（按其他规则）'}
+                        </span>
+                        <span className="text-xs">{runtimeConfig.sandbox.sandboxSettings.network?.allowManagedDomainsOnly ? 'ON' : 'OFF'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <label htmlFor="sandbox-network-allowed-domains" className="text-xs font-medium text-foreground/90">
+                        network.allowedDomains (每行一个)
+                      </label>
+                      <Textarea
+                        id="sandbox-network-allowed-domains"
+                        rows={4}
+                        value={formatLineList(runtimeConfig.sandbox.sandboxSettings.network?.allowedDomains)}
+                        onChange={(e) => updateSandboxNetwork({ allowedDomains: parseLineList(e.target.value) })}
+                        placeholder="example.com"
+                        className={fieldClassName}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="sandbox-filesystem-allow-write" className="text-xs font-medium text-foreground/90">
+                        filesystem.allowWrite (每行一个)
+                      </label>
+                      <Textarea
+                        id="sandbox-filesystem-allow-write"
+                        rows={4}
+                        value={formatLineList(runtimeConfig.sandbox.sandboxSettings.filesystem?.allowWrite)}
+                        onChange={(e) => updateSandboxFilesystem({ allowWrite: parseLineList(e.target.value) })}
+                        placeholder="/tmp"
+                        className={fieldClassName}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="sandbox-filesystem-deny-write" className="text-xs font-medium text-foreground/90">
+                        filesystem.denyWrite (每行一个)
+                      </label>
+                      <Textarea
+                        id="sandbox-filesystem-deny-write"
+                        rows={4}
+                        value={formatLineList(runtimeConfig.sandbox.sandboxSettings.filesystem?.denyWrite)}
+                        onChange={(e) => updateSandboxFilesystem({ denyWrite: parseLineList(e.target.value) })}
+                        placeholder="/Users/secret"
+                        className={fieldClassName}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="sandbox-filesystem-deny-read" className="text-xs font-medium text-foreground/90">
+                        filesystem.denyRead (每行一个)
+                      </label>
+                      <Textarea
+                        id="sandbox-filesystem-deny-read"
+                        rows={4}
+                        value={formatLineList(runtimeConfig.sandbox.sandboxSettings.filesystem?.denyRead)}
+                        onChange={(e) => updateSandboxFilesystem({ denyRead: parseLineList(e.target.value) })}
+                        placeholder="/Users/secret"
+                        className={fieldClassName}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-border/60 bg-secondary/25 px-3 py-2.5 text-xs text-muted-foreground">
+                    说明：沙箱边界由 Claude Agent SDK 提供。此处仅配置 SDK 官方 `sandboxSettings` 字段。
+                  </div>
+
+                  {runtimeMessage && (
+                    <div
+                      className={cn(
+                        'rounded-xl border px-3 py-2 text-xs',
+                        /失败|错误/.test(runtimeMessage)
+                          ? 'border-destructive/35 bg-destructive/12 text-destructive'
+                          : 'border-border/60 bg-secondary/35 text-muted-foreground',
+                      )}
+                    >
+                      {runtimeMessage}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activePrimary === 'skills' && (
+                <div className="settings-panel-enter space-y-3">
+                  <div className="rounded-2xl border border-border/60 bg-[linear-gradient(168deg,hsl(var(--secondary)/0.42),hsl(var(--background)/0.36))] p-4 sm:p-5">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <Wrench className="h-4 w-4 text-muted-foreground" />
+                        <p className="text-sm font-semibold text-foreground/95">Skill 管理</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full border border-border/60 bg-background/45 px-3 py-1 text-xs text-muted-foreground">
+                          已启用 {enabledSkillCount}/{skillItems.length}
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={runtimeBusy}
+                          onClick={handleRefreshSkills}
+                          className="gap-1.5 border-border/65 bg-background/40 hover:bg-secondary/65"
+                        >
+                          <RefreshCw className={cn('h-3.5 w-3.5', runtimeBusy && 'animate-spin')} />
+                          刷新
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                      技能来源目录：`./.claude/skills`、`~/.claude/skills`、`$CODEX_HOME/skills`。开启后会注入系统提示词。
+                    </p>
+                  </div>
+
+                  <Input
+                    value={skillQuery}
+                    onChange={(e) => setSkillQuery(e.target.value)}
+                    placeholder="按 skill id / name / description 搜索"
+                    className={fieldClassName}
+                  />
+
+                  {filteredSkillItems.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-border/55 bg-secondary/20 px-3 py-3 text-xs text-muted-foreground">
+                      {skillItems.length === 0 ? '当前未发现可用技能。' : '没有匹配的技能。'}
+                    </div>
+                  ) : (
+                    <div className="grid gap-2.5 sm:grid-cols-2">
+                      {filteredSkillItems.map((skill) => {
+                        const enabled = runtimeConfig.enabledSkillIds.includes(skill.id);
+                        return (
+                          <button
+                            key={skill.id}
+                            type="button"
+                            onClick={() => toggleSkill(skill.id)}
+                            aria-pressed={enabled}
+                            className={cn(
+                              'group w-full rounded-xl border px-3 py-3 text-left transition-all duration-200',
+                              enabled
+                                ? 'border-primary/38 bg-[linear-gradient(140deg,hsl(var(--primary)/0.2),hsl(var(--cool-accent)/0.1))]'
+                                : 'border-border/55 bg-secondary/30 hover:border-border/80 hover:bg-secondary/52',
+                            )}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-semibold text-foreground/92 truncate">{skill.name || skill.id}</p>
+                                <p className="mt-0.5 break-all text-[11px] text-muted-foreground/80">{skill.id}</p>
+                                {skill.description && (
+                                  <p className="mt-1 text-xs text-muted-foreground/85 line-clamp-2">{skill.description}</p>
+                                )}
+                                <p className="mt-1.5 break-all text-[11px] text-muted-foreground/70">{skill.path}</p>
+                              </div>
+                              <div
+                                className={cn(
+                                  'rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide',
+                                  enabled
+                                    ? 'border-primary/45 bg-primary/18 text-primary'
+                                    : 'border-border/60 bg-background/35 text-muted-foreground',
+                                )}
+                              >
+                                {enabled ? 'ON' : 'OFF'}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {runtimeMessage && (
+                    <div
+                      className={cn(
+                        'rounded-xl border px-3 py-2 text-xs',
+                        /失败|错误/.test(runtimeMessage)
+                          ? 'border-destructive/35 bg-destructive/12 text-destructive'
+                          : 'border-border/60 bg-secondary/35 text-muted-foreground',
+                      )}
+                    >
+                      {runtimeMessage}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1109,7 +1586,8 @@ export function SettingsDialog() {
             测试连接
           </Button>
           <Button
-            onClick={saveConfig}
+            onClick={handleSaveAllSettings}
+            disabled={runtimeBusy}
             className="gap-2 text-primary-foreground shadow-primary/20"
           >
             保存设置

@@ -22,6 +22,7 @@ export function registerChatHandlers(context: MainProcessContext): void {
       const service = context.getAgentServiceOrThrow();
       const resolvedMessage = context.resolveUserMessage(message);
       const prompt = resolvedMessage.modelMessage || message;
+      const effectiveSystemPrompt = context.buildSystemPrompt(systemPrompt);
 
       const chatAttachments: ChatAttachment[] | undefined = attachments?.map((a) => ({
         name: a.name,
@@ -31,7 +32,7 @@ export function registerChatHandlers(context: MainProcessContext): void {
 
       try {
         const stream = service.sendMessageStream(prompt, {
-          systemPrompt,
+          systemPrompt: effectiveSystemPrompt,
           attachments: chatAttachments,
         });
 
@@ -55,9 +56,10 @@ export function registerChatHandlers(context: MainProcessContext): void {
     const service = context.getAgentServiceOrThrow();
     const resolvedMessage = context.resolveUserMessage(message);
     const prompt = resolvedMessage.modelMessage || message;
+    const effectiveSystemPrompt = context.buildSystemPrompt(systemPrompt);
 
     const chunks: string[] = [];
-    for await (const chunk of service.sendMessageStream(prompt, { systemPrompt })) {
+    for await (const chunk of service.sendMessageStream(prompt, { systemPrompt: effectiveSystemPrompt })) {
       if (chunk.type === 'text') chunks.push(chunk.content);
       if (chunk.type === 'error') throw new Error(chunk.content);
     }

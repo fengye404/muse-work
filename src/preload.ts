@@ -11,6 +11,8 @@ import type {
   ModelProvidersConfig,
   PathAutocompleteItem,
   RewindHistoryResult,
+  RuntimeConfig,
+  SkillInfo,
   StreamChunk,
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -47,6 +49,8 @@ const IPC_CHANNELS = {
   // Config management
   CONFIG_SAVE: 'config-save',
   CONFIG_LOAD: 'config-load',
+  RUNTIME_CONFIG_SAVE: 'runtime-config-save',
+  RUNTIME_CONFIG_LOAD: 'runtime-config-load',
 
   // MCP management
   MCP_LIST_SERVERS: 'mcp-list-servers',
@@ -54,6 +58,9 @@ const IPC_CHANNELS = {
   MCP_REFRESH: 'mcp-refresh',
   MCP_UPSERT_SERVER: 'mcp-upsert-server',
   MCP_REMOVE_SERVER: 'mcp-remove-server',
+
+  // Skills
+  SKILL_LIST: 'skill-list',
 
   // Tool system
   TOOL_APPROVAL_REQUEST: 'tool-approval-request',
@@ -150,6 +157,12 @@ const electronAPI: ElectronAPI = {
   configLoad: () =>
     ipcRenderer.invoke(IPC_CHANNELS.CONFIG_LOAD) as Promise<ModelProvidersConfig>,
 
+  runtimeConfigSave: (config: RuntimeConfig) =>
+    ipcRenderer.invoke(IPC_CHANNELS.RUNTIME_CONFIG_SAVE, config),
+
+  runtimeConfigLoad: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.RUNTIME_CONFIG_LOAD) as Promise<RuntimeConfig>,
+
   mcpListServers: () =>
     ipcRenderer.invoke(IPC_CHANNELS.MCP_LIST_SERVERS) as Promise<McpServerStatus[]>,
 
@@ -164,6 +177,9 @@ const electronAPI: ElectronAPI = {
 
   mcpRemoveServer: (name: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.MCP_REMOVE_SERVER, name) as Promise<McpRefreshResult>,
+
+  skillList: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.SKILL_LIST) as Promise<SkillInfo[]>,
 
   onToolApprovalRequest: (callback: (request: ToolApprovalRequest) => void) => {
     toolApprovalListener = replaceListener(

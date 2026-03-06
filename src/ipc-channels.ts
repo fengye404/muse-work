@@ -24,6 +24,8 @@ export const IPC_CHANNELS = {
   // Config management
   CONFIG_SAVE: 'config-save',
   CONFIG_LOAD: 'config-load',
+  RUNTIME_CONFIG_SAVE: 'runtime-config-save',
+  RUNTIME_CONFIG_LOAD: 'runtime-config-load',
 
   // MCP management
   MCP_LIST_SERVERS: 'mcp-list-servers',
@@ -31,6 +33,9 @@ export const IPC_CHANNELS = {
   MCP_REFRESH: 'mcp-refresh',
   MCP_UPSERT_SERVER: 'mcp-upsert-server',
   MCP_REMOVE_SERVER: 'mcp-remove-server',
+
+  // Skills
+  SKILL_LIST: 'skill-list',
 
   // Tool system
   TOOL_APPROVAL_REQUEST: 'tool-approval-request',

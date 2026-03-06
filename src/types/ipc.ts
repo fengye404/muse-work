@@ -11,6 +11,7 @@ import type { ModelConfig, ModelProvidersConfig } from './model';
 import type { Session, SessionMeta } from './session';
 import type { ToolApprovalRequest, ToolApprovalResponse } from './tool';
 import type { McpServerConfig, McpServerStatus, McpToolInfo, McpRefreshResult } from './mcp';
+import type { RuntimeConfig, SkillInfo } from './runtime';
 
 export { IPC_CHANNELS } from '../ipc-channels';
 
@@ -39,12 +40,15 @@ export interface ElectronAPI {
 
   configSave: (config: ModelProvidersConfig) => Promise<boolean>;
   configLoad: () => Promise<ModelProvidersConfig>;
+  runtimeConfigSave: (config: RuntimeConfig) => Promise<boolean>;
+  runtimeConfigLoad: () => Promise<RuntimeConfig>;
 
   mcpListServers: () => Promise<McpServerStatus[]>;
   mcpListTools: () => Promise<McpToolInfo[]>;
   mcpRefresh: () => Promise<McpRefreshResult>;
   mcpUpsertServer: (name: string, config: McpServerConfig) => Promise<McpRefreshResult>;
   mcpRemoveServer: (name: string) => Promise<McpRefreshResult>;
+  skillList: () => Promise<SkillInfo[]>;
 
   onToolApprovalRequest: (callback: (request: ToolApprovalRequest) => void) => void;
   respondToolApproval: (response: ToolApprovalResponse) => void;

@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
 import { AgentService } from '../agent-service';
+import { normalizeRuntimeConfig } from '../runtime-config';
 
 test('openai provider setup does not mutate ~/.claude/settings.json', async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-service-home-'));
@@ -63,5 +64,91 @@ test('openai provider setup does not mutate ~/.claude/settings.json', async () =
     }
 
     fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('normalizeRuntimeConfig ignores legacy docker fields and applies sdk defaults', () => {
+  const normalized = normalizeRuntimeConfig({
+    sandbox: {
+      mode: 'sandbox',
+      image: 'node:20-alpine',
+      cpus: 8,
+      memoryMB: 8192,
+      networkEnabled: true,
+    },
+    enabledSkillIds: ['a', 'b'],
+  });
+
+  assert.equal(normalized.sandbox.mode, 'sandbox');
+  assert.deepEqual(normalized.sandbox.sandboxSettings, {
+    enabled: false,
+    allowUnsandboxedCommands: false,
+  });
+  assert.deepEqual(normalized.enabledSkillIds, ['a', 'b']);
+  const sandboxRecord = normalized.sandbox as unknown as Record<string, unknown>;
+  assert.equal('image' in sandboxRecord, false);
+  assert.equal('cpus' in sandboxRecord, false);
+  assert.equal('memoryMB' in sandboxRecord, false);
+  assert.equal('networkEnabled' in sandboxRecord, false);
+});
+
+test('agent sdk options include sandbox only when runtime mode is sandbox', () => {
+  const service = new AgentService();
+
+  const buildSDKOptions = (service as unknown as {
+    buildSDKOptions: (env: Record<string, string | undefined>) => Record<string, unknown>;
+  }).buildSDKOptions.bind(service);
+
+  const localOptions = buildSDKOptions({});
+  assert.equal(localOptions.sandbox, undefined);
+
+  service.setSandboxConfig({
+    mode: 'sandbox',
+    sandboxSettings: {
+      enabled: true,
+      allowUnsandboxedCommands: false,
+      network: {
+        allowedDomains: ['example.com'],
+      },
+    },
+  });
+
+  const sandboxOptions = buildSDKOptions({});
+  const sandboxSetting = sandboxOptions.sandbox as Record<string, unknown>;
+  assert.equal(sandboxSetting.enabled, true);
+  assert.equal(sandboxSetting.allowUnsandboxedCommands, false);
+  assert.deepEqual(
+    (sandboxSetting.network as Record<string, unknown>).allowedDomains,
+    ['example.com'],
+  );
+
+  service.setSandboxConfig({
+    mode: 'local',
+    sandboxSettings: {
+      enabled: true,
+      allowUnsandboxedCommands: false,
+    },
+  });
+
+  const localOptionsAgain = buildSDKOptions({});
+  assert.equal(localOptionsAgain.sandbox, undefined);
+});
+
+test('source no longer contains docker run sandbox wrapper path', () => {
+  const repoRoot = path.resolve(__dirname, '..', '..', '..');
+  const srcRoot = path.join(repoRoot, 'src');
+  const legacySandboxPath = path.join(srcRoot, 'main-process', 'sandbox', 'sandbox-manager.ts');
+  assert.equal(fs.existsSync(legacySandboxPath), false);
+
+  const filesToCheck = [
+    path.join(srcRoot, 'agent-service.ts'),
+    path.join(srcRoot, 'main-process', 'main-process-context.ts'),
+    path.join(srcRoot, 'renderer', 'stores', 'chat-store.ts'),
+  ];
+
+  for (const filePath of filesToCheck) {
+    const content = fs.readFileSync(filePath, 'utf8');
+    assert.equal(content.includes('docker run --rm -i'), false, `${filePath} still contains docker wrapper command`);
+    assert.equal(content.includes('prepareToolInput('), false, `${filePath} still references command rewrite path`);
   }
 });

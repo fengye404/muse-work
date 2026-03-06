@@ -12,8 +12,10 @@ import type {
   ModelProvidersConfig,
   PathAutocompleteItem,
   RewindHistoryResult,
+  RuntimeConfig,
   Session,
   SessionMeta,
+  SkillInfo,
   StreamChunk,
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -168,6 +170,27 @@ export const electronApiClient = {
     return api ? api.configLoad() : Promise.resolve({ activeProviderId: null, activeModelId: null, providers: [] });
   },
 
+  runtimeConfigSave: (config: RuntimeConfig): Promise<boolean> => {
+    const api = getApiOrNull();
+    return api ? api.runtimeConfigSave(config) : Promise.resolve(false);
+  },
+
+  runtimeConfigLoad: (): Promise<RuntimeConfig> => {
+    const api = getApiOrNull();
+    return api
+      ? api.runtimeConfigLoad()
+      : Promise.resolve({
+        sandbox: {
+          mode: 'local',
+          sandboxSettings: {
+            enabled: false,
+            allowUnsandboxedCommands: false,
+          },
+        },
+        enabledSkillIds: [],
+      });
+  },
+
   mcpListServers: (): Promise<McpServerStatus[]> => {
     const api = getApiOrNull();
     return api ? api.mcpListServers() : Promise.resolve([]);
@@ -191,6 +214,11 @@ export const electronApiClient = {
   mcpRemoveServer: (name: string): Promise<McpRefreshResult> => {
     const api = getApiOrNull();
     return api ? api.mcpRemoveServer(name) : rejectUnavailable('mcpRemoveServer');
+  },
+
+  skillList: (): Promise<SkillInfo[]> => {
+    const api = getApiOrNull();
+    return api ? api.skillList() : Promise.resolve([]);
   },
 
   onToolApprovalRequest: (callback: (request: ToolApprovalRequest) => void) => {

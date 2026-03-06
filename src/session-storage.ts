@@ -17,11 +17,14 @@ import type {
   ModelProvidersConfig,
   McpServersConfig,
   Provider,
+  RuntimeConfig,
 } from './types';
+import { DEFAULT_RUNTIME_CONFIG, normalizeRuntimeConfig } from './runtime-config';
 
 const ACTIVE_PROVIDER_ID_KEY = 'activeProviderId';
 const ACTIVE_MODEL_ID_KEY = 'activeModelId';
 const ACTIVE_MODEL_INSTANCE_ID_KEY = 'activeModelInstanceId';
+const RUNTIME_CONFIG_KEY = 'runtimeConfig';
 
 function createProviderId(): string {
   return `provider_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -360,6 +363,37 @@ export class SessionStorage {
       return parsed as McpServersConfig;
     } catch {
       return {};
+    }
+  }
+
+  // ==================== Runtime Config ====================
+
+  saveRuntimeConfig(config: RuntimeConfig): void {
+    const normalized = normalizeRuntimeConfig(config);
+    const payload = JSON.stringify(normalized);
+    this.db.prepare('INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)').run(RUNTIME_CONFIG_KEY, payload);
+  }
+
+  loadRuntimeConfig(): RuntimeConfig {
+    const row = this.db
+      .prepare('SELECT value FROM config WHERE key = ?')
+      .get(RUNTIME_CONFIG_KEY) as { value: string } | undefined;
+
+    if (!row?.value) {
+      return {
+        sandbox: { ...DEFAULT_RUNTIME_CONFIG.sandbox },
+        enabledSkillIds: [...DEFAULT_RUNTIME_CONFIG.enabledSkillIds],
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(row.value) as unknown;
+      return normalizeRuntimeConfig(parsed);
+    } catch {
+      return {
+        sandbox: { ...DEFAULT_RUNTIME_CONFIG.sandbox },
+        enabledSkillIds: [...DEFAULT_RUNTIME_CONFIG.enabledSkillIds],
+      };
     }
   }
 
