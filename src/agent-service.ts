@@ -33,9 +33,11 @@ import type { ProxyServerHandle } from './ai/protocol-translator/proxy-server';
 import type {
   StreamChunk,
   Provider,
+  RuntimeConfig,
   McpServerConfig as AppMcpServerConfig,
   McpServersConfig,
 } from './types';
+import { DEFAULT_RUNTIME_CONFIG } from './runtime-config';
 
 // Lazy-loaded SDK functions (ESM module loaded via dynamic import at runtime)
 let _sdkLoaded = false;
@@ -79,6 +81,10 @@ export class AgentService {
   private slashCommands: SlashCommand[] = [];
   private mcpServersConfig: Record<string, SDKMcpServerConfig> = {};
   private workingDirectory: string = process.cwd();
+  private sandboxConfig: RuntimeConfig['sandbox'] = {
+    mode: DEFAULT_RUNTIME_CONFIG.sandbox.mode,
+    sandboxSettings: { ...DEFAULT_RUNTIME_CONFIG.sandbox.sandboxSettings },
+  };
 
   private canUseToolCallback: CanUseTool | null = null;
   private onSessionInitCallback: ((sessionId: string) => void) | null = null;
@@ -119,6 +125,13 @@ export class AgentService {
     }
   }
 
+  setSandboxConfig(config: RuntimeConfig['sandbox']): void {
+    this.sandboxConfig = {
+      mode: config.mode === 'sandbox' ? 'sandbox' : 'local',
+      sandboxSettings: this.cloneSandboxSettings(config.sandboxSettings),
+    };
+  }
+
   getSlashCommands(): SlashCommand[] {
     return this.slashCommands;
   }
@@ -155,45 +168,8 @@ export class AgentService {
     message: string,
     options?: SendMessageOptions,
   ): AsyncGenerator<StreamChunk, void, unknown> {
-    const isOpenAI = this.config.provider === 'openai';
-    const settingSources: SDKOptions['settingSources'] = isOpenAI
-      ? ['project', 'local']
-      : ['user', 'project', 'local'];
-
     const env = await this.buildEnv();
-
-    const sdkOptions: SDKOptions = {
-      model: this.config.model,
-      cwd: this.workingDirectory,
-      env,
-      tools: { type: 'preset', preset: 'claude_code' },
-      includePartialMessages: true,
-      permissionMode: 'default',
-      settingSources,
-      stderr: (data: string) => {
-        console.error('[claude-code-cli]', data.trimEnd());
-      },
-    };
-
-    if (this.canUseToolCallback) {
-      sdkOptions.canUseTool = this.canUseToolCallback;
-    }
-
-    if (this.currentSessionId) {
-      sdkOptions.resume = this.currentSessionId;
-    }
-
-    if (Object.keys(this.mcpServersConfig).length > 0) {
-      sdkOptions.mcpServers = this.mcpServersConfig;
-    }
-
-    if (options?.systemPrompt) {
-      sdkOptions.systemPrompt = {
-        type: 'preset',
-        preset: 'claude_code',
-        append: options.systemPrompt,
-      };
-    }
+    const sdkOptions = this.buildSDKOptions(env, options);
 
     await loadSDK();
     console.log(`[agent-service] Starting query: model=${this.config.model}, provider=${this.config.provider}, cwd=${this.workingDirectory}`);
@@ -301,6 +277,55 @@ export class AgentService {
     return env;
   }
 
+  private buildSDKOptions(
+    env: Record<string, string | undefined>,
+    sendOptions?: SendMessageOptions,
+  ): SDKOptions {
+    const isOpenAI = this.config.provider === 'openai';
+    const settingSources: SDKOptions['settingSources'] = isOpenAI
+      ? ['project', 'local']
+      : ['user', 'project', 'local'];
+
+    const sdkOptions: SDKOptions = {
+      model: this.config.model,
+      cwd: this.workingDirectory,
+      env,
+      tools: { type: 'preset', preset: 'claude_code' },
+      includePartialMessages: true,
+      permissionMode: 'default',
+      settingSources,
+      stderr: (data: string) => {
+        console.error('[claude-code-cli]', data.trimEnd());
+      },
+    };
+
+    if (this.canUseToolCallback) {
+      sdkOptions.canUseTool = this.canUseToolCallback;
+    }
+
+    if (this.currentSessionId) {
+      sdkOptions.resume = this.currentSessionId;
+    }
+
+    if (this.sandboxConfig.mode === 'sandbox') {
+      sdkOptions.sandbox = this.cloneSandboxSettings(this.sandboxConfig.sandboxSettings);
+    }
+
+    if (Object.keys(this.mcpServersConfig).length > 0) {
+      sdkOptions.mcpServers = this.mcpServersConfig;
+    }
+
+    if (sendOptions?.systemPrompt) {
+      sdkOptions.systemPrompt = {
+        type: 'preset',
+        preset: 'claude_code',
+        append: sendOptions.systemPrompt,
+      };
+    }
+
+    return sdkOptions;
+  }
+
   private async ensureProxy(): Promise<ProxyServerHandle> {
     if (this.proxyHandle) return this.proxyHandle;
 
@@ -321,6 +346,37 @@ export class AgentService {
       await this.proxyHandle.stop();
       this.proxyHandle = null;
     }
+  }
+
+  private cloneSandboxSettings(settings: RuntimeConfig['sandbox']['sandboxSettings']): RuntimeConfig['sandbox']['sandboxSettings'] {
+    return {
+      ...settings,
+      network: settings.network
+        ? {
+          ...settings.network,
+          allowedDomains: settings.network.allowedDomains ? [...settings.network.allowedDomains] : undefined,
+          allowUnixSockets: settings.network.allowUnixSockets ? [...settings.network.allowUnixSockets] : undefined,
+        }
+        : undefined,
+      filesystem: settings.filesystem
+        ? {
+          ...settings.filesystem,
+          allowWrite: settings.filesystem.allowWrite ? [...settings.filesystem.allowWrite] : undefined,
+          denyWrite: settings.filesystem.denyWrite ? [...settings.filesystem.denyWrite] : undefined,
+          denyRead: settings.filesystem.denyRead ? [...settings.filesystem.denyRead] : undefined,
+        }
+        : undefined,
+      ignoreViolations: settings.ignoreViolations
+        ? Object.fromEntries(Object.entries(settings.ignoreViolations).map(([k, v]) => [k, [...v]]))
+        : undefined,
+      excludedCommands: settings.excludedCommands ? [...settings.excludedCommands] : undefined,
+      ripgrep: settings.ripgrep
+        ? {
+          ...settings.ripgrep,
+          args: settings.ripgrep.args ? [...settings.ripgrep.args] : undefined,
+        }
+        : undefined,
+    };
   }
 
   // ---------------------------------------------------------------------------

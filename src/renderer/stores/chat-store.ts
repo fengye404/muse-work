@@ -7,6 +7,7 @@ import type {
   ChatImageAttachment,
   MessageItem,
   RewindHistoryResult,
+  RuntimeConfig,
   StreamUsageInfo,
   ToolCallRecord,
 } from '../../types';
@@ -136,6 +137,66 @@ export const useChatStore = create<ChatState>((set, get) => {
     ]);
   };
 
+  const formatSandboxStatus = (runtime: Awaited<ReturnType<typeof electronApiClient.runtimeConfigLoad>>) => {
+    const sandbox = runtime.sandbox;
+    const settings = sandbox.sandboxSettings;
+    const network = settings.network;
+    const filesystem = settings.filesystem;
+    const listOrEmpty = (items?: string[]) => (items && items.length > 0 ? items.join(', ') : '(未设置)');
+    const booleanOrEmpty = (value?: boolean) => (value === undefined ? '(未设置)' : String(value));
+
+    return [
+      '沙箱执行状态：',
+      `- 模式: ${sandbox.mode === 'sandbox' ? 'sandbox (SDK 沙箱)' : 'local (本地直连)'}`,
+      `- enabled: ${settings.enabled === true ? 'true' : 'false'}`,
+      `- allowUnsandboxedCommands: ${settings.allowUnsandboxedCommands === true ? 'true' : 'false'}`,
+      `- network.allowManagedDomainsOnly: ${booleanOrEmpty(network?.allowManagedDomainsOnly)}`,
+      `- network.allowedDomains: ${listOrEmpty(network?.allowedDomains)}`,
+      `- filesystem.allowWrite: ${listOrEmpty(filesystem?.allowWrite)}`,
+      `- filesystem.denyWrite: ${listOrEmpty(filesystem?.denyWrite)}`,
+      `- filesystem.denyRead: ${listOrEmpty(filesystem?.denyRead)}`,
+    ].join('\n');
+  };
+
+  const formatSkillsStatus = (
+    skills: Awaited<ReturnType<typeof electronApiClient.skillList>>,
+    enabledSkillIds: string[],
+  ) => {
+    if (skills.length === 0) {
+      return '未发现可用技能。请在 `.claude/skills`、`~/.claude/skills` 或 `$CODEX_HOME/skills` 中放置技能目录。';
+    }
+
+    const enabledSet = new Set(enabledSkillIds);
+    const lines = ['可用技能：'];
+    for (const skill of skills) {
+      const marker = enabledSet.has(skill.id) ? '✅' : '▫️';
+      const desc = skill.description ? ` - ${skill.description}` : '';
+      lines.push(`- ${marker} ${skill.id}${desc}`);
+    }
+    return lines.join('\n');
+  };
+
+  const resolveSkillByQuery = (
+    skills: Awaited<ReturnType<typeof electronApiClient.skillList>>,
+    query: string,
+  ) => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return { matched: null as (typeof skills)[number] | null, ambiguous: [] as typeof skills };
+
+    const exactById = skills.find((skill) => skill.id.toLowerCase() === normalized);
+    if (exactById) return { matched: exactById, ambiguous: [] as typeof skills };
+
+    const exactByName = skills.find((skill) => skill.name.toLowerCase() === normalized);
+    if (exactByName) return { matched: exactByName, ambiguous: [] as typeof skills };
+
+    const fuzzy = skills.filter((skill) =>
+      skill.id.toLowerCase().includes(normalized) || skill.name.toLowerCase().includes(normalized),
+    );
+    if (fuzzy.length === 1) return { matched: fuzzy[0], ambiguous: [] as typeof skills };
+    if (fuzzy.length > 1) return { matched: null, ambiguous: fuzzy };
+    return { matched: null, ambiguous: [] as typeof skills };
+  };
+
   const executeSlashCommand = async (input: string): Promise<boolean> => {
     const command = parseSlashCommand(input);
     if (!command) {
@@ -214,6 +275,112 @@ export const useChatStore = create<ChatState>((set, get) => {
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         appendAssistantMessage(`❌ 模型切换失败：${errorMessage}`);
+      }
+      return true;
+    }
+
+    if (command.name === 'skills') {
+      try {
+        const [skills, runtime] = await Promise.all([
+          electronApiClient.skillList(),
+          electronApiClient.runtimeConfigLoad(),
+        ]);
+        appendAssistantMessage(formatSkillsStatus(skills, runtime.enabledSkillIds));
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        appendAssistantMessage(`❌ 读取技能列表失败：${errorMessage}`);
+      }
+      return true;
+    }
+
+    if (command.name === 'skill') {
+      const action = (command.args[0] || '').toLowerCase();
+      const query = command.args.slice(1).join(' ').trim();
+      if (!action || !['on', 'off'].includes(action) || !query) {
+        appendAssistantMessage('用法：`/skill <on|off> <skill-id|name>`，可先用 `/skills` 查看列表。');
+        return true;
+      }
+
+      try {
+        const [skills, runtime] = await Promise.all([
+          electronApiClient.skillList(),
+          electronApiClient.runtimeConfigLoad(),
+        ]);
+        const resolved = resolveSkillByQuery(skills, query);
+        if (resolved.ambiguous.length > 0) {
+          appendAssistantMessage(
+            `匹配到多个技能，请使用更精确的 id：\n${resolved.ambiguous.map((item) => `- ${item.id}`).join('\n')}`,
+          );
+          return true;
+        }
+        if (!resolved.matched) {
+          appendAssistantMessage(`未找到技能：\`${query}\`。输入 \`/skills\` 查看可用列表。`);
+          return true;
+        }
+
+        const enabled = new Set(runtime.enabledSkillIds);
+        if (action === 'on') enabled.add(resolved.matched.id);
+        else enabled.delete(resolved.matched.id);
+
+        const nextConfig = {
+          ...runtime,
+          enabledSkillIds: Array.from(enabled),
+        };
+        await electronApiClient.runtimeConfigSave(nextConfig);
+
+        appendAssistantMessage(
+          action === 'on'
+            ? `已启用技能：\`${resolved.matched.id}\``
+            : `已停用技能：\`${resolved.matched.id}\``,
+        );
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        appendAssistantMessage(`❌ 更新技能状态失败：${errorMessage}`);
+      }
+      return true;
+    }
+
+    if (command.name === 'sandbox') {
+      const action = (command.args[0] || 'status').toLowerCase();
+      if (!['status', 'on', 'off'].includes(action)) {
+        appendAssistantMessage('用法：`/sandbox <on|off|status>`');
+        return true;
+      }
+
+      try {
+        const runtime = await electronApiClient.runtimeConfigLoad();
+        if (action === 'status') {
+          appendAssistantMessage(formatSandboxStatus(runtime));
+          return true;
+        }
+
+        const nextMode: RuntimeConfig['sandbox']['mode'] = action === 'on' ? 'sandbox' : 'local';
+        const nextEnabled = action === 'on';
+        if (runtime.sandbox.mode === nextMode && runtime.sandbox.sandboxSettings.enabled === nextEnabled) {
+          appendAssistantMessage(
+            `沙箱模式已是 ${nextMode === 'sandbox' ? '开启' : '关闭'} 状态。\n${formatSandboxStatus(runtime)}`,
+          );
+          return true;
+        }
+
+        const nextConfig: RuntimeConfig = {
+          ...runtime,
+          sandbox: {
+            ...runtime.sandbox,
+            mode: nextMode,
+            sandboxSettings: {
+              ...runtime.sandbox.sandboxSettings,
+              enabled: nextEnabled,
+            },
+          },
+        };
+        await electronApiClient.runtimeConfigSave(nextConfig);
+        appendAssistantMessage(
+          `${nextMode === 'sandbox' ? '已开启' : '已关闭'}沙箱模式。\n${formatSandboxStatus(nextConfig)}`,
+        );
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        appendAssistantMessage(`❌ 更新沙箱配置失败：${errorMessage}`);
       }
       return true;
     }

@@ -52,6 +52,21 @@ export const BUILT_IN_SLASH_COMMANDS: SlashCommandDefinition[] = [
     usage: '/model <model-id>',
     description: '切换当前模型',
   },
+  {
+    name: 'skills',
+    usage: '/skills',
+    description: '查看可用技能与启用状态',
+  },
+  {
+    name: 'skill',
+    usage: '/skill <on|off> <skill-id|name>',
+    description: '启用或停用指定技能',
+  },
+  {
+    name: 'sandbox',
+    usage: '/sandbox <on|off|status>',
+    description: '切换或查看沙箱执行模式',
+  },
 ];
 
 let sdkCommands: SlashCommandDefinition[] = [];
